@@ -1,10 +1,23 @@
 import type { FastifyPluginAsync } from "fastify";
 
+import { requireMongo } from "../core/data";
 import { aiChatSchema, aiLabReadinessSchema } from "./ai.schema";
 import { buildAiService } from "./ai.service";
 
 const aiRoutes: FastifyPluginAsync = async (app) => {
   const aiService = buildAiService(app.config);
+
+  app.get("/threads/:threadId", async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    const mongo = requireMongo(app);
+    const messages = await mongo
+      .collection("chat_threads")
+      .find({ threadId })
+      .sort({ createdAt: 1 })
+      .limit(200)
+      .toArray();
+    return { status: "ok", data: messages };
+  });
 
   app.post("/chat", { schema: aiChatSchema }, async (request, reply) => {
     const body = request.body as {
@@ -13,13 +26,83 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
       apiKey?: string;
       temperature?: number;
       maxTokens?: number;
+      threadId?: string;
+      userId?: string;
+      appContext?: string;
     };
 
     try {
+      const mongo = requireMongo(app);
+      const now = new Date().toISOString();
+      if (body.threadId) {
+        await mongo.collection("chat_threads").insertOne({
+          threadId: body.threadId,
+          userId: body.userId ?? null,
+          appContext: body.appContext ?? "generic",
+          role: "user",
+          content: body.message,
+          createdAt: now,
+        });
+      }
+
       const data = await aiService.chat(body);
+
+      if (body.threadId) {
+        await mongo.collection("chat_threads").insertOne({
+          threadId: body.threadId,
+          userId: body.userId ?? null,
+          appContext: body.appContext ?? "generic",
+          role: "assistant",
+          content: data.reply,
+          meta: {
+            provider: data.provider,
+            model: data.model,
+            phase: data.phase,
+            quickReplies: data.quickReplies,
+            suggestedTests: data.suggestedTests,
+          },
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (body.userId) {
+        await mongo.collection("ai_insights").insertOne({
+          employeeId: body.appContext === "employee" ? body.userId : null,
+          doctorId: body.appContext === "doctor" ? body.userId : null,
+          threadId: body.threadId ?? null,
+          appContext: body.appContext ?? "generic",
+          eventType: "ai_chat_response",
+          prompt: body.message,
+          reply: data.reply,
+          provider: data.provider,
+          model: data.model,
+          eventAt: new Date().toISOString(),
+        });
+      }
+
       return { status: "ok", data };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "AI request failed";
+      try {
+        const mongo = requireMongo(app);
+        await mongo.collection("system_error_logs").insertOne({
+          service: "backend-api",
+          module: "ai",
+          severity: "error",
+          message,
+          stack: error instanceof Error ? error.stack ?? null : null,
+          context: {
+            route: "/api/ai/chat",
+            appContext: body.appContext ?? "generic",
+            threadId: body.threadId ?? null,
+            userId: body.userId ?? null,
+          },
+          eventAt: new Date().toISOString(),
+          schemaVersion: 1,
+        });
+      } catch {
+        // Keep error reporting best-effort.
+      }
       const statusCode = /not configured/i.test(message) ? 503 : 502;
       return reply.code(statusCode).send({ status: "error", message });
     }

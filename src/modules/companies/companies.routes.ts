@@ -6,8 +6,11 @@ const companiesRoutes: FastifyPluginAsync = async (app) => {
   app.post("/register", async (request) => {
     const body = request.body as {
       name: string;
+      slug?: string;
       email?: string;
       contact_name?: string;
+      contact_phone?: string;
+      billing_email?: string;
       employee_count?: number;
       plan?: string;
       requested_credits?: number;
@@ -21,8 +24,11 @@ const companiesRoutes: FastifyPluginAsync = async (app) => {
     const { error: companyError } = await supabase.from("companies").insert({
       id: companyId,
       name: body.name,
+      slug: body.slug ?? body.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
       email: body.email ?? null,
       contact_name: body.contact_name ?? null,
+      contact_phone: body.contact_phone ?? null,
+      billing_email: body.billing_email ?? body.email ?? null,
       employee_count: body.employee_count ?? 0,
       plan: body.plan ?? "starter",
       status: "pending",
@@ -35,11 +41,14 @@ const companiesRoutes: FastifyPluginAsync = async (app) => {
       throw new Error(`Failed to create company registration: ${companyError.message}`);
     }
 
+    const walletId = crypto.randomUUID();
     const { error: walletError } = await supabase.from("company_credit_wallets").insert({
-      id: crypto.randomUUID(),
+      id: walletId,
       company_id: companyId,
       balance: 0,
+      locked_balance: 0,
       credit_limit: 0,
+      minimum_reserve: Math.max((body.employee_count ?? 0) * 25000, 0),
       billing_cycle: "monthly",
       created_at: now,
       updated_at: now,
@@ -47,6 +56,18 @@ const companiesRoutes: FastifyPluginAsync = async (app) => {
 
     if (walletError) {
       throw new Error(`Failed to initialize company wallet: ${walletError.message}`);
+    }
+
+    const { error: policyError } = await supabase.from("company_credit_policies").upsert({
+      company_id: companyId,
+      coins_per_inr: 10,
+      minimum_locked_credits_per_employee: 25000,
+      recommended_minimum_buy_formula_version: 1,
+      allow_custom_recharge: true,
+      updated_at: now,
+    });
+    if (policyError) {
+      throw new Error(`Failed to initialize company credit policy: ${policyError.message}`);
     }
 
     await enqueueOutboxEvent(app, {
@@ -64,6 +85,7 @@ const companiesRoutes: FastifyPluginAsync = async (app) => {
       status: "ok",
       data: {
         companyId,
+        walletId,
         registrationStatus: "pending",
       },
     };

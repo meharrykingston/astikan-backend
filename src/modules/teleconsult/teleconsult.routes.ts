@@ -17,16 +17,23 @@ type SessionRecord = {
   activeProvider: Provider;
   failoverCount: number;
   channelName: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number;
   createdAt: string;
   updatedAt: string;
 };
 
 type PrescriptionRecord = {
   id: string;
+  appointmentId: string | null;
   teleconsultSessionId: string;
   doctorId: string;
+  employeeId: string | null;
   notes: string;
+  conditionSummary: string | null;
   medicines: Array<{ name: string; dosage?: string; schedule?: string; duration?: string }>;
+  labTests: Array<{ name: string; instructions?: string }>;
   followUpDate: string | null;
   fileUrl: string | null;
   createdAt: string;
@@ -172,6 +179,9 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
       activeProvider,
       failoverCount: 0,
       channelName: `astikan-${sessionId.slice(0, 8)}`,
+      startedAt: null,
+      endedAt: null,
+      durationSeconds: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -188,6 +198,9 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
         active_provider: session.activeProvider,
         failover_count: session.failoverCount,
         channel_name: session.channelName,
+        started_at: session.startedAt,
+        ended_at: session.endedAt,
+        duration_seconds: session.durationSeconds,
         created_at: session.createdAt,
         updated_at: session.updatedAt,
       });
@@ -273,6 +286,9 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
           activeProvider: data.active_provider,
           failoverCount: data.failover_count ?? 0,
           channelName: data.channel_name ?? `astikan-${id.slice(0, 8)}`,
+          startedAt: data.started_at ?? null,
+          endedAt: data.ended_at ?? null,
+          durationSeconds: data.duration_seconds ?? 0,
           createdAt: data.created_at,
           updatedAt: data.updated_at,
         };
@@ -298,6 +314,7 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
     session.status = "live";
     session.activeProvider = nextProvider;
     session.updatedAt = new Date().toISOString();
+    session.startedAt = session.startedAt ?? session.updatedAt;
     if (shouldIncreaseFailover) {
       session.failoverCount += 1;
     }
@@ -309,6 +326,7 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
           status: session.status,
           active_provider: session.activeProvider,
           failover_count: session.failoverCount,
+          started_at: session.startedAt,
           updated_at: session.updatedAt,
         })
         .eq("id", session.id);
@@ -356,9 +374,13 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
   app.post("/sessions/:id/prescription", async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as {
+      appointmentId?: string;
       doctorId: string;
+      employeeId?: string;
       notes: string;
+      conditionSummary?: string;
       medicines?: Array<{ name: string; dosage?: string; schedule?: string; duration?: string }>;
+      labTests?: Array<{ name: string; instructions?: string }>;
       followUpDate?: string;
       fileUrl?: string;
     };
@@ -369,10 +391,14 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
 
     const prescription: PrescriptionRecord = {
       id: crypto.randomUUID(),
+      appointmentId: body.appointmentId ?? null,
       teleconsultSessionId: id,
       doctorId: body.doctorId,
+      employeeId: body.employeeId ?? null,
       notes: body.notes,
+      conditionSummary: body.conditionSummary ?? null,
       medicines: Array.isArray(body.medicines) ? body.medicines : [],
+      labTests: Array.isArray(body.labTests) ? body.labTests : [],
       followUpDate: body.followUpDate ?? null,
       fileUrl: body.fileUrl ?? null,
       createdAt: new Date().toISOString(),
@@ -381,9 +407,12 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
     if (hasSupabase(app)) {
       const { error } = await app.dbClients.supabase!.from("prescription_headers").insert({
         id: prescription.id,
+        appointment_id: prescription.appointmentId,
         teleconsult_session_id: prescription.teleconsultSessionId,
         doctor_id: prescription.doctorId,
+        employee_id: prescription.employeeId,
         notes: prescription.notes,
+        condition_summary: prescription.conditionSummary,
         medicines_json: prescription.medicines,
         follow_up_date: prescription.followUpDate,
         file_url: prescription.fileUrl,
@@ -397,11 +426,13 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
 
     await persistMongoEvent(app, {
       teleconsultSessionId: id,
+      employeeId: body.employeeId,
       doctorId: body.doctorId,
       eventType: "prescription_created",
       payload: {
         prescriptionId: prescription.id,
         medicineCount: prescription.medicines.length,
+        labTestCount: prescription.labTests.length,
       },
     });
 
@@ -431,10 +462,14 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
           status: "ok",
           data: {
             id: data.id,
+            appointmentId: data.appointment_id ?? null,
             teleconsultSessionId: data.teleconsult_session_id,
             doctorId: data.doctor_id,
+            employeeId: data.employee_id ?? null,
             notes: data.notes ?? "",
+            conditionSummary: data.condition_summary ?? null,
             medicines: data.medicines_json ?? [],
+            labTests: [],
             followUpDate: data.follow_up_date ?? null,
             fileUrl: data.file_url ?? null,
             createdAt: data.created_at,
@@ -454,6 +489,102 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
     return {
       status: "ok",
       data: fallback,
+    };
+  });
+
+  app.post("/sessions/:id/complete", async (request) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as {
+      completedBy?: string;
+      endedAt?: string;
+    };
+
+    let session: SessionRecord | null = null;
+    if (hasSupabase(app)) {
+      const { data } = await app.dbClients.supabase!
+        .from("teleconsult_sessions")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
+      if (data) {
+        session = {
+          id: data.id,
+          appointmentId: data.appointment_id,
+          companyId: data.company_id,
+          employeeId: data.employee_id,
+          doctorId: data.doctor_id,
+          scheduledAt: data.scheduled_at,
+          status: data.status,
+          activeProvider: data.active_provider,
+          failoverCount: data.failover_count ?? 0,
+          channelName: data.channel_name ?? `astikan-${id.slice(0, 8)}`,
+          startedAt: data.started_at ?? null,
+          endedAt: data.ended_at ?? null,
+          durationSeconds: data.duration_seconds ?? 0,
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+        };
+      }
+    }
+
+    if (!session) {
+      session = sessionsFallback.get(id) ?? null;
+    }
+    if (!session) {
+      throw new Error("Teleconsult session not found");
+    }
+
+    const endedAt = body.endedAt ?? new Date().toISOString();
+    const startedAt = session.startedAt ?? session.createdAt;
+    const durationSeconds = Math.max(0, Math.round((Date.parse(endedAt) - Date.parse(startedAt)) / 1000));
+
+    session.status = "completed";
+    session.endedAt = endedAt;
+    session.updatedAt = endedAt;
+    session.durationSeconds = durationSeconds;
+    sessionsFallback.set(session.id, session);
+
+    if (hasSupabase(app)) {
+      const { error } = await app.dbClients.supabase!
+        .from("teleconsult_sessions")
+        .update({
+          status: "completed",
+          ended_at: endedAt,
+          duration_seconds: durationSeconds,
+          updated_at: endedAt,
+        })
+        .eq("id", id);
+      if (error) {
+        app.log.warn({ error }, "teleconsult_sessions completion update failed");
+      }
+
+      if (session.appointmentId) {
+        await app.dbClients.supabase!
+          .from("appointments")
+          .update({ status: "completed", updated_at: endedAt })
+          .eq("id", session.appointmentId);
+      }
+    }
+
+    await persistMongoEvent(app, {
+      teleconsultSessionId: id,
+      companyId: session.companyId,
+      employeeId: session.employeeId,
+      doctorId: session.doctorId,
+      eventType: "session_completed",
+      payload: {
+        completedBy: body.completedBy ?? null,
+        durationSeconds,
+      },
+    });
+
+    return {
+      status: "ok",
+      data: {
+        sessionId: id,
+        sessionStatus: "completed",
+        durationSeconds,
+      },
     };
   });
 };

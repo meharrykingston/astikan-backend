@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { GridFSBucket } from "mongodb";
 
 export function requireSupabase(app: FastifyInstance) {
   if (!app.dbClients.supabase) {
@@ -12,6 +13,13 @@ export function requireMongo(app: FastifyInstance) {
     throw new Error("MongoDB is not configured");
   }
   return app.dbClients.mongo;
+}
+
+export function requireMongoBucket(app: FastifyInstance): GridFSBucket {
+  if (!app.dbClients.mongoBucket) {
+    throw new Error("Mongo GridFS is not configured");
+  }
+  return app.dbClients.mongoBucket;
 }
 
 export async function enqueueOutboxEvent(

@@ -1,5 +1,8 @@
+import crypto from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 
+import { enqueueOutboxEvent, requireMongo, requireSupabase } from "../core/data";
+import { ensureCompanyByReference, ensureEmployeePrincipal } from "../core/identity";
 import {
   catalogQuerySchema,
   cancelOrderSchema,
@@ -155,7 +158,116 @@ const labRoutes: FastifyPluginAsync = async (app) => {
   app.post("/book-order", async (request) => {
     const payload = request.body as Record<string, unknown>;
     const data = await labService.bookOrder(payload);
-    return { status: "ok", data };
+    const providerData = toRecord(data);
+    const supabase = requireSupabase(app);
+    const mongo = requireMongo(app);
+    const now = new Date().toISOString();
+
+    const companyId = await ensureCompanyByReference(app, {
+      companyReference: typeof payload.companyReference === "string" ? payload.companyReference : undefined,
+      companyName: typeof payload.companyName === "string" ? payload.companyName : undefined,
+    });
+
+    const employee = await ensureEmployeePrincipal(app, {
+      companyId,
+      email: typeof payload.email === "string" ? payload.email : undefined,
+      phone: typeof payload.mobile === "string" ? payload.mobile : undefined,
+      fullName: typeof payload.customer_name === "string" ? payload.customer_name : undefined,
+      handle:
+        typeof payload.customer_name === "string"
+          ? payload.customer_name
+          : typeof payload.email === "string"
+            ? payload.email
+            : undefined,
+    });
+
+    const localOrderId = crypto.randomUUID();
+    const providerReference =
+      getString(providerData, "reference_id") ??
+      getString(providerData, "reference") ??
+      getString(providerData, "booking_reference") ??
+      getString(payload, "reference_id") ??
+      localOrderId;
+    const providerOrderReference =
+      getString(providerData, "order_id") ??
+      getString(providerData, "order_no") ??
+      getString(payload, "order_id") ??
+      providerReference;
+    const labTestName =
+      getString(payload, "test_name") ??
+      getString(payload, "testName") ??
+      getString(payload, "test_parameter") ??
+      "Lab Test";
+    const providerTestCode =
+      getString(payload, "test_id") ??
+      getString(payload, "testid") ??
+      getString(payload, "test_code") ??
+      slug(labTestName);
+    const priceInr = getNumber(payload, "amount") ?? getNumber(payload, "price") ?? 0;
+    const creditCost = getNumber(payload, "creditCost") ?? Math.round(priceInr * 10);
+
+    let labTestCatalogId = await ensureLabCatalogEntry(supabase, {
+      provider: "niramaya",
+      providerTestCode,
+      name: labTestName,
+      basePriceInr: priceInr,
+    });
+
+    const { error: orderError } = await supabase.from("lab_orders").insert({
+      id: localOrderId,
+      company_id: companyId,
+      employee_id: employee.userId,
+      patient_id: null,
+      prescription_id: null,
+      lab_test_catalog_id: labTestCatalogId,
+      provider: "niramaya",
+      provider_order_reference: String(providerOrderReference),
+      status: "created",
+      slot_at: normalizeSlotAt(payload),
+      report_storage_key: null,
+      credit_cost: creditCost,
+      price_inr: priceInr,
+      created_at: now,
+      updated_at: now,
+    });
+    if (orderError) {
+      throw new Error(`Failed to create local lab order: ${orderError.message}`);
+    }
+
+    await supabase.from("lab_order_status_history").insert({
+      id: crypto.randomUUID(),
+      lab_order_id: localOrderId,
+      status: "created",
+      provider_payload_json: providerData,
+      created_at: now,
+    });
+
+    await mongo.collection("lab_order_events").insertOne({
+      labOrderId: localOrderId,
+      providerOrderReference,
+      companyId,
+      employeeId: employee.userId,
+      eventType: "lab_order_created",
+      payload: providerData,
+      source: "backend-api",
+      eventAt: now,
+      ingestedAt: now,
+      schemaVersion: 1,
+    });
+
+    await enqueueOutboxEvent(app, {
+      event_type: "lab.order.created",
+      aggregate_type: "lab_order",
+      aggregate_id: localOrderId,
+      payload: {
+        companyId,
+        employeeId: employee.userId,
+        providerOrderReference,
+      },
+      idempotency_key: `lab-order-created:${localOrderId}`,
+    });
+
+    return { status: "ok", data: { ...providerData, localOrderId, providerReference } };
   });
 
   app.get(
@@ -164,7 +276,44 @@ const labRoutes: FastifyPluginAsync = async (app) => {
     async (request) => {
       const { reference } = request.params as { reference: string };
       const data = await labService.orderStatus(reference);
-      return { status: "ok", data };
+      const providerData = toRecord(data);
+      const supabase = requireSupabase(app);
+      const mongo = requireMongo(app);
+      const now = new Date().toISOString();
+      const localStatus = normalizeLabStatus(getString(providerData, "request_status") ?? getString(providerData, "status"));
+
+      const { data: existing } = await supabase
+        .from("lab_orders")
+        .select("id")
+        .eq("provider_order_reference", reference)
+        .maybeSingle();
+
+      if (existing?.id) {
+        await supabase.from("lab_orders").update({
+          status: localStatus,
+          updated_at: now,
+        }).eq("id", existing.id);
+
+        await supabase.from("lab_order_status_history").insert({
+          id: crypto.randomUUID(),
+          lab_order_id: existing.id,
+          status: localStatus,
+          provider_payload_json: providerData,
+          created_at: now,
+        });
+
+        await mongo.collection("lab_order_events").insertOne({
+          labOrderId: existing.id,
+          providerOrderReference: reference,
+          eventType: "lab_order_status_checked",
+          payload: providerData,
+          source: "backend-api",
+          eventAt: now,
+          ingestedAt: now,
+          schemaVersion: 1,
+        });
+      }
+      return { status: "ok", data: providerData };
     }
   );
 
@@ -174,6 +323,7 @@ const labRoutes: FastifyPluginAsync = async (app) => {
     async (request) => {
       const payload = request.body as CancelOrderBody;
       const data = await labService.cancelOrder(payload);
+      await syncLabOrderStatus(app, payload.reference, "cancelled", toRecord(data));
       return { status: "ok", data };
     }
   );
@@ -184,6 +334,7 @@ const labRoutes: FastifyPluginAsync = async (app) => {
     async (request) => {
       const payload = request.body as RescheduleOrderBody;
       const data = await labService.rescheduleOrder(payload);
+      await syncLabOrderStatus(app, payload.reference, "rescheduled", toRecord(data));
       return { status: "ok", data };
     }
   );
@@ -235,5 +386,137 @@ const labRoutes: FastifyPluginAsync = async (app) => {
     }
   );
 };
+
+async function ensureLabCatalogEntry(
+  supabase: ReturnType<typeof requireSupabase>,
+  input: {
+    provider: string;
+    providerTestCode: string;
+    name: string;
+    basePriceInr: number;
+  }
+) {
+  const { data: existing } = await supabase
+    .from("lab_test_catalog")
+    .select("id")
+    .eq("provider", input.provider)
+    .eq("provider_test_code", input.providerTestCode)
+    .maybeSingle();
+
+  if (existing?.id) return existing.id;
+
+  const labTestCatalogId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("lab_test_catalog").insert({
+    id: labTestCatalogId,
+    provider: input.provider,
+    provider_test_code: input.providerTestCode,
+    name: input.name,
+    category: "General Test",
+    sample_type: null,
+    tat_hours: null,
+    base_price_inr: input.basePriceInr,
+    default_credit_cost: Math.round(input.basePriceInr * 10),
+    availability_status: "live",
+    coverage_note: null,
+    metadata_json: {},
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) {
+    throw new Error(`Failed to ensure lab test catalog entry: ${error.message}`);
+  }
+  return labTestCatalogId;
+}
+
+function getString(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number") return String(value);
+  return null;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { value };
+}
+
+function getNumber(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^\d.]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeSlotAt(payload: Record<string, unknown>) {
+  const date = getString(payload, "date");
+  const time = getString(payload, "time");
+  if (!date) return null;
+  const candidate = time ? `${date} ${time}` : date;
+  const parsed = new Date(candidate);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function normalizeLabStatus(input: string | null) {
+  const status = input?.toLowerCase() ?? "";
+  if (status.includes("resched")) return "rescheduled";
+  if (status.includes("cancel")) return "cancelled";
+  if (status.includes("process")) return "processing";
+  if (status.includes("sample")) return "sample_collection";
+  if (status.includes("complete")) return "completed";
+  if (status.includes("schedule")) return "scheduled";
+  return "created";
+}
+
+function slug(input: string) {
+  return input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+async function syncLabOrderStatus(
+  app: Parameters<FastifyPluginAsync>[0],
+  reference: string,
+  status: "cancelled" | "rescheduled",
+  providerPayload: Record<string, unknown>
+) {
+  const supabase = requireSupabase(app);
+  const mongo = requireMongo(app);
+  const now = new Date().toISOString();
+  const { data: existing } = await supabase
+    .from("lab_orders")
+    .select("id")
+    .eq("provider_order_reference", reference)
+    .maybeSingle();
+
+  if (!existing?.id) return;
+
+  await supabase.from("lab_orders").update({
+    status,
+    updated_at: now,
+  }).eq("id", existing.id);
+
+  await supabase.from("lab_order_status_history").insert({
+    id: crypto.randomUUID(),
+    lab_order_id: existing.id,
+    status,
+    provider_payload_json: providerPayload,
+    created_at: now,
+  });
+
+  await mongo.collection("lab_order_events").insertOne({
+    labOrderId: existing.id,
+    providerOrderReference: reference,
+    eventType: `lab_order_${status}`,
+    payload: providerPayload,
+    source: "backend-api",
+    eventAt: now,
+    ingestedAt: now,
+    schemaVersion: 1,
+  });
+}
 
 export default labRoutes;

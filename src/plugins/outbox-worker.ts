@@ -7,6 +7,15 @@ const POLL_MS = 5000;
 const outboxWorkerPlugin: FastifyPluginAsync = async (app) => {
   let timer: NodeJS.Timeout | null = null;
 
+  function eventCollectionName(eventType: string) {
+    if (eventType.startsWith("appointment.")) return "appointment_events";
+    if (eventType.startsWith("lab.order.")) return "lab_order_events";
+    if (eventType.startsWith("pharmacy.order.")) return "pharmacy_order_events";
+    if (eventType.startsWith("program.")) return "program_activity_events";
+    if (eventType.startsWith("integration.")) return "integration_sync_logs";
+    return "behavior_audit_logs";
+  }
+
   const run = async () => {
     try {
       const supabase = requireSupabase(app);
@@ -25,6 +34,25 @@ const outboxWorkerPlugin: FastifyPluginAsync = async (app) => {
 
       for (const event of data) {
         try {
+          const collectionName = eventCollectionName(event.event_type);
+          await mongo.collection(collectionName).updateOne(
+            { outboxEventId: event.id },
+            {
+              $setOnInsert: {
+                outboxEventId: event.id,
+                eventType: event.event_type,
+                aggregateType: event.aggregate_type,
+                aggregateId: event.aggregate_id,
+                payload: event.payload_json,
+                eventAt: event.created_at,
+                ingestedAt: new Date().toISOString(),
+                source: "outbox-worker",
+                schemaVersion: 1,
+              },
+            },
+            { upsert: true }
+          );
+
           await mongo.collection("behavior_audit_logs").updateOne(
             { outboxEventId: event.id },
             {
