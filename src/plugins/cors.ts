@@ -5,34 +5,27 @@ const corsPlugin: FastifyPluginAsync = async (app) => {
   const rawOrigin = app.hasDecorator("config")
     ? app.config.CORS_ORIGIN
     : process.env.CORS_ORIGIN ?? "";
-  const trimmed = rawOrigin.trim();
-  const fallback = "*";
-  const configuredOrigins = (trimmed || fallback).split(",").map((origin) => origin.trim()).filter(Boolean);
-  const hasWildcard = configuredOrigins.some((origin) => origin === "*" || origin.includes("*"));
-  const origin = hasWildcard ? true : configuredOrigins;
+  const configuredOrigins = rawOrigin
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  const allowPatterns = [/\.vercel\.app$/];
+  const allowList = new Set([
+    "http://localhost:5173",
+    "http://localhost:5174",
+    ...configuredOrigins,
+  ]);
 
   await app.register(cors, {
-    origin: true,
     credentials: false,
-  });
-
-  app.addHook("onRequest", async (request, reply) => {
-    const reqOrigin = request.headers.origin;
-    if (!reply.getHeader("access-control-allow-origin")) {
-      reply.header("Access-Control-Allow-Origin", reqOrigin ?? "*");
-      reply.header(
-        "Access-Control-Allow-Headers",
-        "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-      );
-      reply.header(
-        "Access-Control-Allow-Methods",
-        "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-      );
-    }
-
-    if (request.method === "OPTIONS") {
-      reply.status(204).send();
-    }
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowList.has("*")) return cb(null, true);
+      if (allowList.has(origin)) return cb(null, true);
+      if (allowPatterns.some((pattern) => pattern.test(origin))) return cb(null, true);
+      return cb(null, false);
+    },
   });
 };
 
