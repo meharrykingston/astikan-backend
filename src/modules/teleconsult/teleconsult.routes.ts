@@ -24,6 +24,17 @@ type SessionRecord = {
   updatedAt: string;
 };
 
+type TokenRecord = {
+  id: string;
+  sessionId: string;
+  participantId: string;
+  participantType: "employee" | "doctor";
+  provider: Provider;
+  channelName: string;
+  token: string;
+  createdAt: string;
+};
+
 type PrescriptionRecord = {
   id: string;
   appointmentId: string | null;
@@ -40,6 +51,7 @@ type PrescriptionRecord = {
 };
 
 const sessionsFallback = new Map<string, SessionRecord>();
+const tokensFallback = new Map<string, TokenRecord>();
 const prescriptionsFallback = new Map<string, PrescriptionRecord>();
 
 const hasSupabase = (app: Parameters<FastifyPluginAsync>[0]) => Boolean(app.dbClients.supabase);
@@ -68,6 +80,9 @@ function buildRtcPayload(params: {
       secret: app.config.ZEGO_SERVER_SECRET,
       payload: strictPayload,
     });
+    if (!token) {
+      throw new Error("Failed to generate Zego token");
+    }
     return {
       provider,
       appId: app.config.ZEGO_APP_ID,
@@ -83,6 +98,9 @@ function buildRtcPayload(params: {
     channelName,
     userId,
   });
+  if (!token) {
+    throw new Error("Failed to generate Agora token");
+  }
   return {
     provider,
     appId: app.config.AGORA_APP_ID,
@@ -303,6 +321,21 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
       throw new Error("Teleconsult session not found");
     }
 
+    const scheduledAtMs = Date.parse(session.scheduledAt);
+    const joinWindowStart = new Date(scheduledAtMs - 60 * 1000).toISOString();
+    const joinWindowEnd = new Date(scheduledAtMs + 30 * 60 * 1000).toISOString();
+    const now = Date.now();
+    if (Number.isFinite(scheduledAtMs) && now < scheduledAtMs - 60 * 1000) {
+      return {
+        status: "error",
+        message: "Teleconsult can be joined only within 1 minute of the scheduled time.",
+        data: {
+          joinWindowStart,
+          joinWindowEnd,
+        },
+      };
+    }
+
     const nextProvider = chooseProvider(
       body.preferredProvider ?? session.activeProvider,
       app,
@@ -351,6 +384,52 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
+    const rtcPayload = buildRtcPayload({
+      app,
+      provider: session.activeProvider,
+      channelName: session.channelName,
+      userId:
+        body.participantId ??
+        (body.participantType === "doctor" ? session.doctorId : session.employeeId),
+    });
+
+    const participantType = body.participantType ?? "employee";
+    const participantId = body.participantId ?? (participantType === "doctor" ? session.doctorId : session.employeeId);
+    const tokenRecord: TokenRecord = {
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      participantId,
+      participantType,
+      provider: session.activeProvider,
+      channelName: session.channelName,
+      token: rtcPayload.token,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (hasMongo(app)) {
+      try {
+        await app.dbClients.mongo!.collection("teleconsult_tokens").insertOne(tokenRecord);
+      } catch (error) {
+        app.log.warn({ error }, "Failed to store teleconsult token in Mongo");
+      }
+    } else {
+      tokensFallback.set(tokenRecord.id, tokenRecord);
+    }
+
+    await persistMongoEvent(app, {
+      teleconsultSessionId: session.id,
+      companyId: session.companyId,
+      employeeId: session.employeeId,
+      doctorId: session.doctorId,
+      eventType: "token_issued",
+      payload: {
+        tokenId: tokenRecord.id,
+        participantType,
+        participantId,
+        provider: session.activeProvider,
+      },
+    });
+
     return {
       status: "ok",
       data: {
@@ -359,14 +438,9 @@ const teleconsultRoutes: FastifyPluginAsync = async (app) => {
         provider: session.activeProvider,
         failoverCount: session.failoverCount,
         channelName: session.channelName,
-        rtc: buildRtcPayload({
-          app,
-          provider: session.activeProvider,
-          channelName: session.channelName,
-          userId:
-            body.participantId ??
-            (body.participantType === "doctor" ? session.doctorId : session.employeeId),
-        }),
+        joinWindowStart,
+        joinWindowEnd,
+        rtc: rtcPayload,
       },
     };
   });
