@@ -43,6 +43,11 @@ export type ReadinessQuestion = {
   options: Array<{ value: "yes" | "no"; label: string }>;
 };
 
+type PrescriptionMedicine = {
+  name: string;
+  strength?: string;
+};
+
 const parseSuggestedTests = (text: string): {
   cleanedReply: string;
   suggestedTests: SuggestedTest[];
@@ -224,6 +229,37 @@ const parseReadinessQuestions = (
   return defaultReadinessQuestions(testName);
 };
 
+const parsePrescriptionMedicines = (raw: string): PrescriptionMedicine[] => {
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (jsonMatch?.[0]) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        medicines?: Array<{ name?: string; strength?: string }>;
+      };
+      const meds = (parsed.medicines ?? [])
+        .map((item) => ({
+          name: (item.name || "").trim(),
+          strength: item.strength?.trim(),
+        }))
+        .filter((item) => item.name.length > 0)
+        .slice(0, 10);
+      if (meds.length > 0) {
+        return meds;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[\s*\-•\d.)]+/, "").trim())
+    .filter((line) => line.length > 0 && line.length < 80)
+    .slice(0, 10);
+
+  return lines.map((name) => ({ name }));
+};
+
 export const buildAiService = (config: AiConfig) => {
   return {
     chat: async ({
@@ -357,6 +393,74 @@ export const buildAiService = (config: AiConfig) => {
         response.data?.choices?.[0]?.message?.content?.trim?.() || "";
       const questions = parseReadinessQuestions(raw, testName);
       return { questions, model };
+    },
+    prescriptionFromImage: async ({
+      imageBase64,
+      mimeType,
+      apiKey,
+    }: {
+      imageBase64: string;
+      mimeType?: string;
+      apiKey?: string;
+    }): Promise<{ medicines: PrescriptionMedicine[]; model: string }> => {
+      const resolvedApiKey = (apiKey || config.GROK_API_KEY || "").trim();
+      if (!resolvedApiKey) {
+        throw new Error("Grok API key is not configured");
+      }
+
+      const model = config.GROK_MODEL || "grok-4-1-fast-reasoning";
+      const baseUrl = (config.GROK_BASE_URL || "https://api.x.ai/v1").replace(
+        /\/+$/,
+        ""
+      );
+
+      const safeBase64 = imageBase64.startsWith("data:")
+        ? imageBase64
+        : `data:${mimeType || "image/jpeg"};base64,${imageBase64}`;
+
+      const response = await axios.post(
+        `${baseUrl}/chat/completions`,
+        {
+          model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "Extract medicine names from the prescription image. Return only valid minified JSON: {\"medicines\":[{\"name\":\"...\",\"strength\":\"...\"}]} with unique medicines.",
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Read this prescription image and list all medicine names. If strength is visible, include it.",
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: safeBase64,
+                  },
+                },
+              ],
+            },
+          ],
+          temperature: 0.2,
+          max_tokens: 600,
+        },
+        {
+          timeout: 30000,
+          headers: {
+            Authorization: `Bearer ${resolvedApiKey}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const raw =
+        response.data?.choices?.[0]?.message?.content?.trim?.() || "";
+      const medicines = parsePrescriptionMedicines(raw);
+      return { medicines, model };
     },
   };
 };

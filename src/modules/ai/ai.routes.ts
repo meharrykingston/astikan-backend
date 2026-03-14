@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 
-import { aiChatSchema, aiLabReadinessSchema } from "./ai.schema";
+import { aiChatSchema, aiLabReadinessSchema, aiPrescriptionParseSchema } from "./ai.schema";
 import { buildAiService } from "./ai.service";
 
 const aiRoutes: FastifyPluginAsync = async (app) => {
@@ -127,6 +127,32 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
 
       try {
         const data = await aiService.labReadinessQuestions(body);
+        return { status: "ok", data };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "AI request failed";
+        const statusCode = /not configured/i.test(message) ? 503 : 502;
+        return reply.code(statusCode).send({ status: "error", message });
+      }
+    }
+  );
+
+  app.post(
+    "/prescription-parse",
+    { schema: aiPrescriptionParseSchema },
+    async (request, reply) => {
+      const body = request.body as {
+        imageBase64: string;
+        fileName?: string;
+        mimeType?: string;
+        apiKey?: string;
+      };
+
+      try {
+        const data = await aiService.prescriptionFromImage({
+          imageBase64: body.imageBase64,
+          mimeType: body.mimeType,
+          apiKey: body.apiKey,
+        });
         return { status: "ok", data };
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "AI request failed";

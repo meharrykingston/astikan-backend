@@ -33,3 +33,16 @@ export const aiLabReadinessSchema = {
     },
   },
 } as const;
+
+export const aiPrescriptionParseSchema = {
+  body: {
+    type: "object",
+    required: ["imageBase64"],
+    properties: {
+      imageBase64: { type: "string", minLength: 20 },
+      fileName: { type: "string" },
+      mimeType: { type: "string" },
+      apiKey: { type: "string", minLength: 1 },
+    },
+  },
+} as const;
