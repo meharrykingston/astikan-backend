@@ -48,6 +48,24 @@ type PrescriptionMedicine = {
   strength?: string;
 };
 
+type DailyTipSection = {
+  heading: string;
+  body: string;
+  coach: string;
+  question: { id: string; text: string; options: string[] };
+};
+
+type DailyTipPayload = {
+  id: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  moodTags: string[];
+  heroImage: string;
+  iconKey: string;
+  sections: DailyTipSection[];
+};
+
 const parseSuggestedTests = (text: string): {
   cleanedReply: string;
   suggestedTests: SuggestedTest[];
@@ -461,6 +479,82 @@ export const buildAiService = (config: AiConfig) => {
         response.data?.choices?.[0]?.message?.content?.trim?.() || "";
       const medicines = parsePrescriptionMedicines(raw);
       return { medicines, model };
+    },
+    dailyHealthBrief: async ({
+      city,
+      items,
+    }: {
+      city: string;
+      items: Array<{ title: string; link: string; pubDate?: string; source?: string }>;
+    }): Promise<{ city: string; topic: string; tips: DailyTipPayload[] }> => {
+      const resolvedApiKey = (config.GROK_API_KEY || "").trim();
+      if (!resolvedApiKey) {
+        throw new Error("Grok API key is not configured");
+      }
+
+      const model = config.GROK_MODEL || "grok-4-1-fast-reasoning";
+      const baseUrl = (config.GROK_BASE_URL || "https://api.x.ai/v1").replace(
+        /\/+$/,
+        ""
+      );
+
+      const headlines = items
+        .slice(0, 16)
+        .map((item, idx) => {
+          const date = item.pubDate ? ` (${item.pubDate})` : "";
+          const source = item.source ? ` [${item.source}]` : "";
+          return `${idx + 1}. ${item.title}${source}${date} -> ${item.link}`;
+        })
+        .join("\n");
+
+      const userPrompt = [
+        `City: ${city}`,
+        "You are selecting the most relevant daily health topic and 3 micro-tips based on local news and alerts.",
+        "Use the headlines below. If none are urgent, focus on air quality, heat, hydration, or stress.",
+        "Return ONLY valid minified JSON in this shape:",
+        "{\"city\":\"...\",\"topic\":\"...\",\"tips\":[{\"id\":\"daily-1\",\"title\":\"...\",\"summary\":\"...\",\"tags\":[\"...\"],\"moodTags\":[\"general\"],\"heroImage\":\"https://images.unsplash.com/...\",\"iconKey\":\"activity|droplet|smile|moon|heart|thermo\",\"sections\":[{\"heading\":\"...\",\"body\":\"...\",\"coach\":\"...\",\"question\":{\"id\":\"q1\",\"text\":\"...\",\"options\":[\"...\",\"...\",\"...\"]}}]}]}",
+        "Keep each summary under 120 characters. Use India-safe language. Avoid medical diagnosis.",
+        "Headlines:",
+        headlines,
+      ].join("\n");
+
+      const response = await axios.post(
+        `${baseUrl}/chat/completions`,
+        {
+          model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You create a daily health topic and 3 bite-size tips based on local news. Output JSON only.",
+            },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.3,
+          max_tokens: 900,
+        },
+        {
+          timeout: 30000,
+          headers: {
+            Authorization: `Bearer ${resolvedApiKey}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const raw = response.data?.choices?.[0]?.message?.content?.trim?.() || "";
+      try {
+        const parsed = JSON.parse(raw) as { city?: string; topic?: string; tips?: DailyTipPayload[] };
+        const tips = Array.isArray(parsed.tips) ? parsed.tips : [];
+        if (!tips.length) throw new Error("No tips returned");
+        return {
+          city: parsed.city || city,
+          topic: parsed.topic || `Daily care for ${city}`,
+          tips,
+        };
+      } catch {
+        throw new Error("Failed to parse AI daily tips");
+      }
     },
   };
 };

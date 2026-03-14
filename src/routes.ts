@@ -14,6 +14,7 @@ import logsRoutes from "./modules/logs/logs.routes";
 import pharmacyRoutes from "./modules/pharmacy/pharmacy.routes";
 import teleconsultRoutes from "./modules/teleconsult/teleconsult.routes";
 import weatherRoutes from "./modules/weather/weather.routes";
+import newsRoutes from "./modules/news/news.routes";
 
 const routes: FastifyPluginAsync = async (app) => {
   await app.register(healthRoutes, { prefix: "/health" });
@@ -31,6 +32,7 @@ const routes: FastifyPluginAsync = async (app) => {
   await app.register(creditsRoutes, { prefix: "/credits" });
   await app.register(teleconsultRoutes, { prefix: "/teleconsult" });
   await app.register(weatherRoutes, { prefix: "/weather" });
+  await app.register(newsRoutes, { prefix: "/news" });
 };
 
 export default routes;
