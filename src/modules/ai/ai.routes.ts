@@ -1,6 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
 
-import { requireMongo } from "../core/data";
 import { aiChatSchema, aiLabReadinessSchema } from "./ai.schema";
 import { buildAiService } from "./ai.service";
 
@@ -9,7 +8,10 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/threads/:threadId", async (request) => {
     const { threadId } = request.params as { threadId: string };
-    const mongo = requireMongo(app);
+    const mongo = app.dbClients.mongo;
+    if (!mongo) {
+      return { status: "ok", data: [] };
+    }
     const messages = await mongo
       .collection("chat_threads")
       .find({ threadId })
@@ -32,9 +34,9 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
     };
 
     try {
-      const mongo = requireMongo(app);
+      const mongo = app.dbClients.mongo;
       const now = new Date().toISOString();
-      if (body.threadId) {
+      if (body.threadId && mongo) {
         await mongo.collection("chat_threads").insertOne({
           threadId: body.threadId,
           userId: body.userId ?? null,
@@ -47,7 +49,7 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
 
       const data = await aiService.chat(body);
 
-      if (body.threadId) {
+      if (body.threadId && mongo) {
         await mongo.collection("chat_threads").insertOne({
           threadId: body.threadId,
           userId: body.userId ?? null,
@@ -65,7 +67,7 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      if (body.userId) {
+      if (body.userId && mongo) {
         await mongo.collection("ai_insights").insertOne({
           employeeId: body.appContext === "employee" ? body.userId : null,
           doctorId: body.appContext === "doctor" ? body.userId : null,
@@ -84,22 +86,24 @@ const aiRoutes: FastifyPluginAsync = async (app) => {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "AI request failed";
       try {
-        const mongo = requireMongo(app);
-        await mongo.collection("system_error_logs").insertOne({
-          service: "backend-api",
-          module: "ai",
-          severity: "error",
-          message,
-          stack: error instanceof Error ? error.stack ?? null : null,
-          context: {
-            route: "/api/ai/chat",
-            appContext: body.appContext ?? "generic",
-            threadId: body.threadId ?? null,
-            userId: body.userId ?? null,
-          },
-          eventAt: new Date().toISOString(),
-          schemaVersion: 1,
-        });
+        const mongo = app.dbClients.mongo;
+        if (mongo) {
+          await mongo.collection("system_error_logs").insertOne({
+            service: "backend-api",
+            module: "ai",
+            severity: "error",
+            message,
+            stack: error instanceof Error ? error.stack ?? null : null,
+            context: {
+              route: "/api/ai/chat",
+              appContext: body.appContext ?? "generic",
+              threadId: body.threadId ?? null,
+              userId: body.userId ?? null,
+            },
+            eventAt: new Date().toISOString(),
+            schemaVersion: 1,
+          });
+        }
       } catch {
         // Keep error reporting best-effort.
       }
