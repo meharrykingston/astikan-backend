@@ -30,7 +30,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const supabase = requireSupabase(app);
     const { data: accessCode, error } = await supabase
       .from("company_access_codes")
-      .select("company_id, code, label, companies(id, name, slug)")
+      .select("company_id, code, label, companies(id, name, slug, contact_phone, metadata_json)")
       .eq("code_type", "employee_app")
       .eq("code", companyCode.toUpperCase())
       .maybeSingle();
@@ -42,13 +42,17 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ status: "error", message: "Company code not found." });
     }
 
+    const company = (accessCode as any).companies ?? null;
+    const hrPhone = company?.contact_phone ?? company?.metadata_json?.hr_phone ?? null;
+
     return {
       status: "ok",
       data: {
         companyId: accessCode.company_id,
         companyCode: accessCode.code,
-        companyName: (accessCode as any).companies?.name ?? accessCode.label ?? "Company",
-        companySlug: (accessCode as any).companies?.slug ?? null,
+        companyName: company?.name ?? accessCode.label ?? "Company",
+        companySlug: company?.slug ?? null,
+        hrPhone,
       },
     };
   });
