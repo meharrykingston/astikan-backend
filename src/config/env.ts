@@ -28,6 +28,7 @@ export type AppEnv = {
   AGORA_APP_ID: string;
   AGORA_APP_CERTIFICATE: string;
   MAPBOX_TOKEN: string;
+  PUBLIC_BASE_URL: string;
 };
 
 const envSchema = {
@@ -68,6 +69,7 @@ const envSchema = {
     AGORA_APP_ID: { type: "string", default: "" },
     AGORA_APP_CERTIFICATE: { type: "string", default: "" },
     MAPBOX_TOKEN: { type: "string", default: "" },
+    PUBLIC_BASE_URL: { type: "string", default: "" },
   },
   additionalProperties: true,
 } as const;

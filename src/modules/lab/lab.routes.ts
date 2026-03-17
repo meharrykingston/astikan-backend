@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import type { FastifyPluginAsync } from "fastify";
 
 import { enqueueOutboxEvent, requireMongo, requireMongoBucket, requireSupabase } from "../core/data";
@@ -151,7 +149,6 @@ const labRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ status: "error", message: "employeeId is required" });
     }
     const supabase = requireSupabase(app);
-    const mongo = requireMongo(app);
     const { data, error } = await supabase
       .from("lab_orders")
       .select("id, report_storage_key, employee_id")
@@ -189,6 +186,7 @@ const labRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ status: "error", message: "employeeId is required" });
     }
     const supabase = requireSupabase(app);
+    const mongo = requireMongo(app);
     const mongoBucket = requireMongoBucket(app);
     const { data, error } = await supabase
       .from("lab_orders")
@@ -273,7 +271,7 @@ const labRoutes: FastifyPluginAsync = async (app) => {
           updates.push({
             id: row.id,
             status,
-            testName: row.lab_test_catalog?.name ?? "Lab Test",
+            testName: row.lab_test_catalog?.[0]?.name ?? "Lab Test",
             reportReady: Boolean(row.report_storage_key),
           });
           lastSnapshot.set(row.id, status);
@@ -867,18 +865,22 @@ async function maybePersistReportUrl(
     if (!response.ok || !response.body) {
       return input.reportUrl;
     }
-    const contentType = response.headers.get("content-type") ?? "application/pdf";
     const bucket = requireMongoBucket(app);
     const fileName = `lab-reports/${input.orderId}/${Date.now()}.pdf`;
     const uploadStream = bucket.openUploadStream(fileName, {
-      contentType,
       metadata: {
+        contentType: response.headers.get("content-type") ?? "application/pdf",
         source: "niramaya",
         orderId: input.orderId,
         reportUrl: input.reportUrl,
       },
     });
-    await pipeline(Readable.fromWeb(response.body as unknown as ReadableStream), uploadStream);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await new Promise<void>((resolve, reject) => {
+      uploadStream.on("finish", () => resolve());
+      uploadStream.on("error", reject);
+      uploadStream.end(buffer);
+    });
     return uploadStream.id?.toString() ?? fileName;
   } catch {
     return input.reportUrl;
