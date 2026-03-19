@@ -78,4 +78,41 @@ export default async function healthRoutes(app: FastifyInstance) {
 
     return { status: "ok" }
   })
+
+  app.post("/vitals/latest", async (request) => {
+    const body = request.body as { companyId?: string; employeeId?: string; metric?: string }
+    if (!body.companyId || !body.employeeId || !body.metric) {
+      throw new Error("companyId, employeeId, and metric are required")
+    }
+    const mongo = requireMongo(app)
+    const latest = await mongo
+      .collection("health_signals")
+      .find({ companyId: body.companyId, employeeId: body.employeeId, metric: body.metric })
+      .sort({ eventAt: -1 })
+      .limit(1)
+      .toArray()
+    if (!latest.length) return { value: null }
+    const record = latest[0] as { value: number; unit?: string; eventAt?: string }
+    return { value: record.value, unit: record.unit ?? null, eventAt: record.eventAt ?? null }
+  })
+
+  app.post("/vitals/history", async (request) => {
+    const body = request.body as { companyId?: string; employeeId?: string; metric?: string; limit?: number }
+    if (!body.companyId || !body.employeeId || !body.metric) {
+      throw new Error("companyId, employeeId, and metric are required")
+    }
+    const limit = typeof body.limit === "number" ? Math.min(120, Math.max(1, body.limit)) : 30
+    const mongo = requireMongo(app)
+    const rows = await mongo
+      .collection("health_signals")
+      .find({ companyId: body.companyId, employeeId: body.employeeId, metric: body.metric })
+      .sort({ eventAt: -1 })
+      .limit(limit)
+      .toArray()
+    const points = rows.map((row) => ({
+      value: (row as { value: number }).value,
+      eventAt: (row as { eventAt?: string }).eventAt ?? new Date().toISOString(),
+    }))
+    return { points }
+  })
 }
