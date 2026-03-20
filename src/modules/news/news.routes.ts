@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { XMLParser } from "fast-xml-parser";
 import { cacheGet, cacheSet } from "../lab/lab.cache";
 import { buildAiService } from "../ai/ai.service";
+import { requireMongo } from "../core/data";
 
 type RssItem = {
   title: string;
@@ -267,6 +268,45 @@ const newsRoutes: FastifyPluginAsync = async (app) => {
       await cacheSet(cacheKey, shuffled, 6 * 60 * 60, app.config.REDIS_URL);
       return reply.send({ status: "ok", data: shuffled });
     }
+  });
+
+  app.post("/daily/answer", async (request) => {
+    const body = request.body as {
+      employeeId?: string;
+      tipId?: string;
+      dayKey?: string;
+      sectionIndex?: number;
+      answer?: string;
+      tags?: string[];
+    };
+
+    if (!body.employeeId || !body.tipId || !body.dayKey || typeof body.sectionIndex !== "number" || !body.answer) {
+      throw new Error("employeeId, tipId, dayKey, sectionIndex, answer are required");
+    }
+
+    const mongo = requireMongo(request.server);
+    const now = new Date().toISOString();
+    await mongo.collection("daily_tip_answers").updateOne(
+      {
+        employeeId: body.employeeId,
+        tipId: body.tipId,
+        dayKey: body.dayKey,
+        sectionIndex: body.sectionIndex,
+      },
+      {
+        $set: {
+          answer: body.answer,
+          tags: body.tags ?? [],
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          createdAt: now,
+        },
+      },
+      { upsert: true },
+    );
+
+    return { status: "ok", data: { stored: true } };
   });
 };
 

@@ -8,30 +8,38 @@ const pharmacyRoutes: FastifyPluginAsync = async (app) => {
     const query = request.query as { search?: string; category?: string; limit?: string; audience?: string };
     const supabase = requireSupabase(app);
     const limit = query.limit ? Number(query.limit) : 50;
-    let dbQuery = supabase
-      .from("pharmacy_product_catalog")
-      .select("id, sku, name, category, description, base_price_inr, image_urls_json, is_active, audience")
-      .eq("is_active", true)
-      .order("name", { ascending: true })
-      .limit(Number.isFinite(limit) ? limit : 50);
+    try {
+      let dbQuery = supabase
+        .from("pharmacy_product_catalog")
+        .select("id, sku, name, category, description, base_price_inr, image_urls_json, is_active, audience")
+        .eq("is_active", true)
+        .order("name", { ascending: true })
+        .limit(Number.isFinite(limit) ? limit : 50);
 
-    if (query.category) {
-      dbQuery = dbQuery.eq("category", query.category);
-    }
-    if (query.search) {
-      dbQuery = dbQuery.ilike("name", `%${query.search}%`);
-    }
-    if (query.audience) {
-      dbQuery = dbQuery.eq("audience", query.audience);
-    }
+      if (query.category) {
+        dbQuery = dbQuery.eq("category", query.category);
+      }
+      if (query.search) {
+        dbQuery = dbQuery.ilike("name", `%${query.search}%`);
+      }
+      if (query.audience) {
+        dbQuery = dbQuery.eq("audience", query.audience);
+      }
 
-    const { data, error } = await dbQuery;
-    if (error) {
-      throw new Error(`Failed to fetch products: ${error.message}`);
-    }
+      const { data, error } = await dbQuery;
+      if (error) {
+        throw new Error(`Failed to fetch products: ${error.message}`);
+      }
 
-    const enriched = await attachInventorySnapshot(supabase, data ?? []);
-    return { status: "ok", data: enriched };
+      const enriched = await attachInventorySnapshot(supabase, data ?? []);
+      return { status: "ok", data: enriched };
+    } catch (error) {
+      app.log.warn({ err: error }, "Pharmacy catalog unavailable, using fallback data");
+      const fallback = getFallbackCatalog(query.audience).filter((item) =>
+        query.category ? item.category === query.category : true
+      );
+      return { status: "ok", data: fallback.slice(0, Number.isFinite(limit) ? limit : 50) };
+    }
   });
 
   app.post("/products/lookup", async (request) => {
@@ -64,32 +72,38 @@ const pharmacyRoutes: FastifyPluginAsync = async (app) => {
   app.get("/categories", async (request) => {
     const query = request.query as { audience?: string };
     const supabase = requireSupabase(app);
-    let dbQuery = supabase
-      .from("pharmacy_product_catalog")
-      .select("category")
-      .eq("is_active", true);
+    try {
+      let dbQuery = supabase
+        .from("pharmacy_product_catalog")
+        .select("category")
+        .eq("is_active", true);
 
-    if (query.audience) {
-      dbQuery = dbQuery.eq("audience", query.audience);
+      if (query.audience) {
+        dbQuery = dbQuery.eq("audience", query.audience);
+      }
+
+      const { data, error } = await dbQuery;
+
+      if (error) {
+        throw new Error(`Failed to fetch categories: ${error.message}`);
+      }
+
+      const counts = new Map<string, number>();
+      for (const row of data ?? []) {
+        const key = row.category ?? "Other";
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+
+      const payload = Array.from(counts.entries())
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      return { status: "ok", data: payload };
+    } catch (error) {
+      app.log.warn({ err: error }, "Pharmacy categories unavailable, using fallback data");
+      const fallback = getFallbackCategories(query.audience);
+      return { status: "ok", data: fallback };
     }
-
-    const { data, error } = await dbQuery;
-
-    if (error) {
-      throw new Error(`Failed to fetch categories: ${error.message}`);
-    }
-
-    const counts = new Map<string, number>();
-    for (const row of data ?? []) {
-      const key = row.category ?? "Other";
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-
-    const payload = Array.from(counts.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    return { status: "ok", data: payload };
   });
 
   app.post("/orders", async (request) => {
@@ -261,6 +275,78 @@ async function attachInventorySnapshot(
       in_stock: available === null ? Boolean(item.is_active) : available > 0,
     };
   });
+}
+
+function getFallbackCatalog(audience?: string) {
+  const products = [
+    {
+      id: "demo-paracetamol",
+      sku: "PARA-500",
+      name: "Paracetamol 500mg",
+      category: "Fever",
+      description: "Pain relief and fever reducer",
+      base_price_inr: 35,
+      image_urls_json: ["https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=80"],
+      is_active: true,
+      audience: "employee",
+      available_qty: 120,
+      in_stock: true,
+    },
+    {
+      id: "demo-azithro",
+      sku: "AZI-250",
+      name: "Azithromycin 250mg",
+      category: "Infection",
+      description: "Antibiotic tablet (doctor prescription required)",
+      base_price_inr: 120,
+      image_urls_json: ["https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=80"],
+      is_active: true,
+      audience: "employee",
+      available_qty: 60,
+      in_stock: true,
+    },
+    {
+      id: "demo-vitaminc",
+      sku: "VITC-1000",
+      name: "Vitamin C 1000mg",
+      category: "Immunity",
+      description: "Daily immunity support tablets",
+      base_price_inr: 199,
+      image_urls_json: ["https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=800&q=80"],
+      is_active: true,
+      audience: "employee",
+      available_qty: 200,
+      in_stock: true,
+    },
+    {
+      id: "demo-oral-rehydration",
+      sku: "ORS-200",
+      name: "ORS Hydration Sachets",
+      category: "Hydration",
+      description: "Electrolyte balance for recovery",
+      base_price_inr: 80,
+      image_urls_json: ["https://images.unsplash.com/photo-1526256262350-7da7584cf5eb?auto=format&fit=crop&w=800&q=80"],
+      is_active: true,
+      audience: "employee",
+      available_qty: 140,
+      in_stock: true,
+    },
+  ];
+
+  if (!audience) return products;
+  return products.filter((item) => item.audience === audience);
+}
+
+function getFallbackCategories(audience?: string) {
+  const products = getFallbackCatalog(audience);
+  const counts = new Map<string, number>();
+  for (const row of products) {
+    const key = row.category ?? "Other";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function slug(input: string) {

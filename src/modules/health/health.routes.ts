@@ -76,7 +76,7 @@ export default async function healthRoutes(app: FastifyInstance) {
       createdAt: now,
     })
 
-    return { status: "ok" }
+    return { status: "ok", data: { stored: true } }
   })
 
   app.post("/vitals/latest", async (request) => {
@@ -91,9 +91,12 @@ export default async function healthRoutes(app: FastifyInstance) {
       .sort({ eventAt: -1 })
       .limit(1)
       .toArray()
-    if (!latest.length) return { value: null }
+    if (!latest.length) return { status: "ok", data: { value: null } }
     const record = latest[0] as unknown as { value?: number; unit?: string; eventAt?: string }
-    return { value: record.value ?? null, unit: record.unit ?? null, eventAt: record.eventAt ?? null }
+    return {
+      status: "ok",
+      data: { value: record.value ?? null, unit: record.unit ?? null, eventAt: record.eventAt ?? null },
+    }
   })
 
   app.post("/vitals/history", async (request) => {
@@ -116,6 +119,114 @@ export default async function healthRoutes(app: FastifyInstance) {
         value: row.value as number,
         eventAt: row.eventAt ?? new Date().toISOString(),
       }))
-    return { points }
+    return { status: "ok", data: { points } }
+  })
+
+  app.post("/profile/get", async (request) => {
+    const body = request.body as { companyId?: string; employeeId?: string }
+    if (!body.companyId || !body.employeeId) {
+      throw new Error("companyId and employeeId are required")
+    }
+    const mongo = requireMongo(app)
+    const profile = await mongo
+      .collection("employee_health_profiles")
+      .findOne({ companyId: body.companyId, employeeId: body.employeeId })
+    return { status: "ok", data: { profile: profile ?? null } }
+  })
+
+  app.post("/profile/save", async (request) => {
+    const body = request.body as {
+      companyId?: string
+      employeeId?: string
+      bloodGroup?: string
+      heightCm?: number | null
+      heightFt?: number | null
+      heightIn?: number | null
+      weightKg?: number | null
+      waistIn?: number | null
+      allergies?: string
+      conditions?: string
+      medications?: string
+      notes?: string
+    }
+    if (!body.companyId || !body.employeeId) {
+      throw new Error("companyId and employeeId are required")
+    }
+    const mongo = requireMongo(app)
+    const now = new Date().toISOString()
+    const payload = {
+      companyId: body.companyId,
+      employeeId: body.employeeId,
+      bloodGroup: body.bloodGroup ?? null,
+      heightCm: typeof body.heightCm === "number" ? body.heightCm : null,
+      heightFt: typeof body.heightFt === "number" ? body.heightFt : null,
+      heightIn: typeof body.heightIn === "number" ? body.heightIn : null,
+      weightKg: typeof body.weightKg === "number" ? body.weightKg : null,
+      waistIn: typeof body.waistIn === "number" ? body.waistIn : null,
+      allergies: body.allergies ?? "",
+      conditions: body.conditions ?? "",
+      medications: body.medications ?? "",
+      notes: body.notes ?? "",
+      updatedAt: now,
+    }
+    await mongo
+      .collection("employee_health_profiles")
+      .updateOne(
+        { companyId: body.companyId, employeeId: body.employeeId },
+        { $set: payload, $setOnInsert: { createdAt: now } },
+        { upsert: true },
+      )
+    return { status: "ok", data: { stored: true } }
+  })
+
+  app.post("/address/get", async (request) => {
+    const body = request.body as { companyId?: string; employeeId?: string }
+    if (!body.companyId || !body.employeeId) {
+      throw new Error("companyId and employeeId are required")
+    }
+    const mongo = requireMongo(app)
+    const record = await mongo
+      .collection("employee_addresses")
+      .findOne({ companyId: body.companyId, employeeId: body.employeeId })
+    return { status: "ok", data: { address: record ?? null } }
+  })
+
+  app.post("/address/save", async (request) => {
+    const body = request.body as {
+      companyId?: string
+      employeeId?: string
+      homeAddress?: string
+      homeLat?: number | null
+      homeLon?: number | null
+      officeAddress?: string
+      officeLat?: number | null
+      officeLon?: number | null
+    }
+    if (!body.companyId || !body.employeeId) {
+      throw new Error("companyId and employeeId are required")
+    }
+    const mongo = requireMongo(app)
+    const now = new Date().toISOString()
+    await mongo
+      .collection("employee_addresses")
+      .updateOne(
+        { companyId: body.companyId, employeeId: body.employeeId },
+        {
+          $set: {
+            companyId: body.companyId,
+            employeeId: body.employeeId,
+            homeAddress: body.homeAddress ?? "",
+            homeLat: typeof body.homeLat === "number" ? body.homeLat : null,
+            homeLon: typeof body.homeLon === "number" ? body.homeLon : null,
+            officeAddress: body.officeAddress ?? "",
+            officeLat: typeof body.officeLat === "number" ? body.officeLat : null,
+            officeLon: typeof body.officeLon === "number" ? body.officeLon : null,
+            updatedAt: now,
+          },
+          $setOnInsert: { createdAt: now },
+        },
+        { upsert: true },
+      )
+    return { status: "ok", data: { stored: true } }
   })
 }
