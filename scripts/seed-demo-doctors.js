@@ -117,7 +117,7 @@ async function main() {
       mobile: doctor.phone,
       highest_qualification: doctor.qualification,
       experience_years: doctor.experience,
-      practice_address: "Astikan OPD Clinic",
+      practice_address: "Astikan OPD Clinic, Connaught Place, New Delhi",
       consultation_fee_inr: 400,
       verification_status: "verified",
       verified_at: now,

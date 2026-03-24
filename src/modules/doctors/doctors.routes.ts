@@ -27,17 +27,19 @@ const doctorsRoutes: FastifyPluginAsync = async (app) => {
       verificationStatus?: string;
       specialization?: string;
       limit?: number;
+      offset?: number;
     };
 
     const supabase = requireSupabase(app);
     const limit = Math.min(Number(query.limit ?? 50) || 50, 100);
+    const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
     const search = query.search?.trim();
 
     let dbQuery = supabase
       .from("doctor_profiles")
       .select("*, doctor_specializations(*), doctor_languages(*), doctor_availability(*), doctor_verification_documents(*)")
       .order("updated_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (query.verificationStatus) {
       dbQuery = dbQuery.eq("verification_status", query.verificationStatus);
