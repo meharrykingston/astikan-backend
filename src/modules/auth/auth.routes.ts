@@ -285,6 +285,28 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ status: "error", message: "Username and password are required." });
     }
 
+    if (!app.dbClients.supabase) {
+      const seedUsername = (app.config.SUPERADMIN_SEED_USERNAME || "superadmin").trim().toLowerCase();
+      const seedPassword = app.config.SUPERADMIN_SEED_PASSWORD || "Astikan@2026";
+      if (username !== seedUsername || password !== seedPassword) {
+        return reply.code(401).send({ status: "error", message: "Invalid super admin credentials." });
+      }
+      return {
+        status: "ok",
+        data: {
+          userId: "local-superadmin",
+          role: "super_admin",
+          fullName: "Astikan Super Admin",
+          email: app.config.SUPERADMIN_SEED_EMAIL || "superadmin@astikan.local",
+          phone: null,
+          avatarUrl: null,
+          companyId: null,
+          companyName: null,
+          companySlug: null,
+        },
+      };
+    }
+
     try {
       await ensureSuperAdminSeed(username);
     } catch (error) {
