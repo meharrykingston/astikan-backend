@@ -327,6 +327,10 @@ export const buildLabService = (config: NiramayaConfig) => {
         normalizedPayload.Pin_code = payload.zip_code;
       }
 
+      if (payload.patient_notes && !normalizedPayload.patient_notes) {
+        normalizedPayload.patient_notes = payload.patient_notes;
+      }
+
       return callNiramaya("test", "/api/addorder", "POST", {
         data: normalizedPayload,
       });
