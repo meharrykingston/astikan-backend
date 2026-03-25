@@ -13,6 +13,7 @@ import integrationsRoutes from "./modules/integrations/integrations.routes";
 import labRoutes from "./modules/lab/lab.routes";
 import logsRoutes from "./modules/logs/logs.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
+import superadminRoutes from "./modules/superadmin/superadmin.routes";
 import pharmacyRoutes from "./modules/pharmacy/pharmacy.routes";
 import teleconsultRoutes from "./modules/teleconsult/teleconsult.routes";
 import weatherRoutes from "./modules/weather/weather.routes";
@@ -26,6 +27,7 @@ const routes: FastifyPluginAsync = async (app) => {
   await app.register(behaviorRoutes, { prefix: "/behavior" });
   await app.register(employeesRoutes, { prefix: "/employees" });
   await app.register(doctorsRoutes, { prefix: "/doctors" });
+  await app.register(superadminRoutes, { prefix: "/superadmin" });
   await app.register(appointmentsRoutes, { prefix: "/appointments" });
   await app.register(logsRoutes, { prefix: "/logs" });
   await app.register(integrationsRoutes, { prefix: "/integrations" });
