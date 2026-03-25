@@ -18,6 +18,22 @@ const superadminRoutes: FastifyPluginAsync = async (app) => {
     const supabase = requireSupabase(app);
     const limit = Math.min(Number(query.limit ?? 100) || 100, 500);
     const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+    const baseUrl =
+      (app.config.PUBLIC_BASE_URL ?? "").replace(/\/+$/, "") ||
+      `${request.protocol}://${request.hostname}`;
+
+    const resolveImage = (value?: string | null) => {
+      if (!value) return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (trimmed.startsWith("http") || trimmed.startsWith("data:") || trimmed.startsWith("blob:")) {
+        return trimmed;
+      }
+      if (trimmed.startsWith("/")) {
+        return `${baseUrl}${trimmed}`;
+      }
+      return `${baseUrl}/assets/${trimmed.replace(/^assets\//, "")}`;
+    };
 
     const { data: profiles, error } = await supabase
       .from("doctor_profiles")
@@ -59,7 +75,7 @@ const superadminRoutes: FastifyPluginAsync = async (app) => {
           phone: profile.mobile ?? user?.phone ?? "",
           specialty: "General Physician",
           status: user?.status === "inactive" ? "Inactive" : profile.verification_status ?? "Pending",
-          image: user?.avatar_url ?? null,
+          image: resolveImage(user?.avatar_url ?? null),
         };
       }),
     };
