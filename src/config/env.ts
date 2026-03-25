@@ -41,7 +41,7 @@ const envSchema = {
     SUPABASE_SERVICE_ROLE_KEY: { type: "string", default: "" },
     SUPERADMIN_SEED_USERNAME: { type: "string", default: "superadmin" },
     SUPERADMIN_SEED_PASSWORD: { type: "string", default: "Astikan@2026" },
-    SUPERADMIN_SEED_EMAIL: { type: "string", default: "superadmin@astikan.local" },
+    SUPERADMIN_SEED_EMAIL: { type: "string", default: "astikanworld@gmail.com" },
     MONGODB_URI: { type: "string", default: "" },
     MONGODB_DB_NAME: { type: "string", default: "astikan" },
     REDIS_URL: { type: "string", default: "" },

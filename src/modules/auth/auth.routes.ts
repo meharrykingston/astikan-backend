@@ -161,7 +161,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     if (existing?.id) return;
 
-    const seedEmail = (app.config.SUPERADMIN_SEED_EMAIL || "superadmin@astikan.local").trim().toLowerCase();
+    const seedEmail = (app.config.SUPERADMIN_SEED_EMAIL || "astikanworld@gmail.com").trim().toLowerCase();
     const seedPassword = app.config.SUPERADMIN_SEED_PASSWORD || "Astikan@2026";
 
     let userId: string | null = null;
@@ -297,7 +297,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           userId: "local-superadmin",
           role: "super_admin",
           fullName: "Astikan Super Admin",
-          email: app.config.SUPERADMIN_SEED_EMAIL || "superadmin@astikan.local",
+          email: app.config.SUPERADMIN_SEED_EMAIL || "astikanworld@gmail.com",
           phone: null,
           avatarUrl: null,
           companyId: null,

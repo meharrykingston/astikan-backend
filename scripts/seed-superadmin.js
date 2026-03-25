@@ -44,7 +44,7 @@ async function ensureAuthUser({ email, fullName, password }) {
 async function main() {
   const username = (process.env.SUPERADMIN_SEED_USERNAME || "superadmin").trim().toLowerCase();
   const password = process.env.SUPERADMIN_SEED_PASSWORD || "Astikan@2026";
-  const email = (process.env.SUPERADMIN_SEED_EMAIL || "superadmin@astikan.local").trim().toLowerCase();
+  const email = (process.env.SUPERADMIN_SEED_EMAIL || "astikanworld@gmail.com").trim().toLowerCase();
 
   const userId = await ensureAuthUser({
     email,
