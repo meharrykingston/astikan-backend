@@ -65,3 +65,15 @@ The backend creates indexes for:
 
 - Current frontend apps still contain local-only doctor profile state. That must be migrated to backend-backed flows next.
 - RLS is set up as a baseline. Since the current apps primarily go through this backend with a service role, backend authorization remains the enforcement point until direct Supabase client access is introduced.
+
+## Current VPS setup
+
+- MongoDB Community now runs locally on the VPS
+- the backend points to the local Mongo instance instead of Atlas
+- Mongo is currently used for event/log/operational collections
+- Supabase/Postgres still holds primary relational business data
+
+This is expected in production:
+
+- Mongo collections such as `teleconsult_events`, `appointment_events`, `employee_notifications`, and `system_error_logs` contain data
+- relational entities such as `appointments`, `app_users`, `doctors`, and `corporates` remain in Supabase/Postgres and should not be expected to appear populated in Mongo
