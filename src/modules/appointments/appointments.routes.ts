@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
-import { enqueueOutboxEvent } from "../core/data";
+import { enqueueOutboxEvent, requireMongo, requireSupabase } from "../core/data";
 
 const appointmentsFallback = new Map<string, Record<string, any>>();
 
@@ -179,7 +179,7 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
 
     let dbQuery = supabase
       .from("appointments")
-      .select("*, opd_visits(patient_eta_minutes, clinic_location, status)")
+      .select("*, opd_visits(patient_eta_minutes, clinic_location, status), teleconsult_sessions(id, company_id, employee_id, doctor_id, scheduled_at, status)")
       .order("scheduled_start", { ascending: true })
       .limit(limit);
     if (query.companyId) dbQuery = dbQuery.eq("company_id", query.companyId);
