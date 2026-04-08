@@ -68,8 +68,8 @@ function initials(name: string) {
 }
 
 async function ensureEmployeeGamification(mongo: ReturnType<typeof requireMongo>, employeeId: string, companyId?: string | null) {
-  const collection = mongo.collection("employee_gamification");
-  let doc = await collection.findOne({ employeeId, companyId: companyId ?? null });
+  const collection = mongo.collection<any>("employee_gamification");
+  let doc = await collection.findOne<Record<string, any>>({ employeeId, companyId: companyId ?? null });
   if (doc) return doc;
 
   const rand = seedRandom(employeeId);
@@ -181,8 +181,9 @@ const gamificationRoutes: FastifyPluginAsync = async (app) => {
       tone: idx === 0 ? "silver" : idx === 1 ? "gold" : "bronze",
     }));
 
-    const rankings = leaderboard.slice(0, 5).map((item, idx) => ({
+    const rankings: Array<LeaderRow & { rank: number }> = leaderboard.slice(0, 5).map((item, idx) => ({
       rank: idx + 1,
+      employeeId: item.employeeId,
       initials: item.initials ?? initials(item.name),
       name: item.name,
       level: item.level ?? 12,
@@ -202,7 +203,8 @@ const gamificationRoutes: FastifyPluginAsync = async (app) => {
       badges: doc.badgesUnlocked,
       trend: 1,
       isYou: true,
-    });
+      employeeId: String(doc.employeeId ?? "you"),
+    } as LeaderRow & { rank: number });
 
     const badgeCollection = BADGES.map((badge) => {
       const progressEntry = doc.badgeProgress?.find((row: any) => row.id === badge.id);

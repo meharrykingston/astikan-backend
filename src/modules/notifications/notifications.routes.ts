@@ -7,7 +7,7 @@ const notificationsRoutes: FastifyPluginAsync = async (app) => {
     const { employeeId, limit } = request.query as { employeeId?: string; limit?: number };
     if (!employeeId) return { status: "error", message: "Missing employeeId" };
     const mongo = requireMongo(app);
-    const col = mongo.collection("employee_notifications");
+    const col = mongo.collection<any>("employee_notifications");
     const items = await col
       .find({ employeeId })
       .sort({ createdAt: -1 })
@@ -41,7 +41,7 @@ const notificationsRoutes: FastifyPluginAsync = async (app) => {
     const { employeeId } = request.query as { employeeId?: string };
     if (!employeeId) return { status: "error", message: "Missing employeeId" };
     const mongo = requireMongo(app);
-    const col = mongo.collection("employee_notifications");
+    const col = mongo.collection<any>("employee_notifications");
     const count = await col.countDocuments({ employeeId, unread: true });
     return { status: "ok", data: { count } };
   });
@@ -81,7 +81,7 @@ const notificationsRoutes: FastifyPluginAsync = async (app) => {
     const mongo = requireMongo(app);
     const col = mongo.collection("employee_notifications");
     if (body.ids && body.ids.length) {
-      await col.updateMany({ employeeId: body.employeeId, _id: { $in: body.ids } }, { $set: { unread: false } });
+      await col.updateMany({ employeeId: body.employeeId, _id: { $in: body.ids as any[] } }, { $set: { unread: false } });
     } else {
       await col.updateMany({ employeeId: body.employeeId }, { $set: { unread: false } });
     }
