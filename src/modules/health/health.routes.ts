@@ -46,6 +46,40 @@ export default async function healthRoutes(app: FastifyInstance) {
     return { status: "ok", data: { employeeId: body.employeeId } }
   })
 
+  app.post("/metrics/get", async (request) => {
+    const body = request.body as { companyId?: string; employeeId?: string }
+    if (!body.companyId || !body.employeeId) {
+      throw new Error("companyId and employeeId are required")
+    }
+
+    const supabase = requireSupabase(app)
+    const { data, error } = await supabase
+      .from("employee_health_metrics")
+      .select("height_cm, weight_kg, waist_cm, updated_at")
+      .eq("employee_id", body.employeeId)
+      .maybeSingle()
+
+    if (error) {
+      throw new Error(`Failed to fetch health metrics: ${error.message}`)
+    }
+
+    if (!data) {
+      return { status: "ok", data: { metrics: null } }
+    }
+
+    return {
+      status: "ok",
+      data: {
+        metrics: {
+          heightCm: data.height_cm ?? null,
+          weightKg: data.weight_kg ?? null,
+          waistCm: data.waist_cm ?? null,
+          updatedAt: data.updated_at ?? null,
+        },
+      },
+    }
+  })
+
   app.post("/vitals", async (request) => {
     const body = request.body as {
       companyId?: string

@@ -172,6 +172,72 @@ export async function ensureDoctorPrincipal(
     throw new Error(`Failed to ensure doctor profile: ${profileError.message}`);
   }
 
+  const { data: existingAvailability } = await supabase
+    .from("doctor_availability")
+    .select("id")
+    .eq("doctor_id", userId)
+    .limit(1);
+
+  if (!existingAvailability || existingAvailability.length === 0) {
+    const patterns = [
+      {
+        weekdays: { start: "09:00:00", end: "18:00:00" },
+        saturday: { start: "09:00:00", end: "13:00:00" },
+        sunday: { start: "10:00:00", end: "13:00:00" },
+      },
+      {
+        weekdays: { start: "11:00:00", end: "20:00:00" },
+        saturday: { start: "11:00:00", end: "16:00:00" },
+        sunday: null,
+      },
+      {
+        weekdays: { start: "10:00:00", end: "19:00:00" },
+        saturday: null,
+        sunday: { start: "10:00:00", end: "13:00:00" },
+      },
+    ];
+
+    const hash = [...userId].reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const schedule = patterns[hash % patterns.length];
+
+    const buildSlots = (days: number[], window: { start: string; end: string }) =>
+      days.flatMap((day) => [
+        {
+          id: crypto.randomUUID(),
+          doctor_id: userId,
+          availability_type: "physical",
+          day_of_week: day,
+          start_time: window.start,
+          end_time: window.end,
+          slot_minutes: 30,
+          location_label: "Clinic",
+          is_active: true,
+        },
+        {
+          id: crypto.randomUUID(),
+          doctor_id: userId,
+          availability_type: "virtual",
+          day_of_week: day,
+          start_time: window.start,
+          end_time: window.end,
+          slot_minutes: 30,
+          location_label: "Teleconsult",
+          is_active: true,
+        },
+      ]);
+
+    const slots = [
+      ...buildSlots([1, 2, 3, 4, 5], schedule.weekdays),
+      ...(schedule.saturday ? buildSlots([6], schedule.saturday) : []),
+      ...(schedule.sunday ? buildSlots([0], schedule.sunday) : []),
+    ];
+
+    const { error: availabilityError } = await supabase.from("doctor_availability").insert(slots);
+    if (availabilityError) {
+      throw new Error(`Failed to seed doctor availability: ${availabilityError.message}`);
+    }
+  }
+
   if (input.specialization) {
     await supabase.from("doctor_specializations").upsert({
       id: crypto.randomUUID(),

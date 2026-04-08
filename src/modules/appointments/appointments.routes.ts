@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
-import { enqueueOutboxEvent, requireMongo, requireSupabase } from "../core/data";
+import { enqueueOutboxEvent } from "../core/data";
+
+const appointmentsFallback = new Map<string, Record<string, any>>();
 
 const appointmentsRoutes: FastifyPluginAsync = async (app) => {
   app.post("/", async (request) => {
@@ -25,12 +27,11 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
       patientEtaMinutes?: number;
     };
 
-    const supabase = requireSupabase(app);
-    const mongo = requireMongo(app);
+    const supabase = app.dbClients.supabase;
+    const mongo = app.dbClients.mongo;
     const now = new Date().toISOString();
     const appointmentId = crypto.randomUUID();
-
-    const { error } = await supabase.from("appointments").insert({
+    const record = {
       id: appointmentId,
       company_id: body.companyId,
       employee_id: body.employeeId ?? null,
@@ -50,68 +51,92 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
       meeting_join_window_end: body.meetingJoinWindowEnd ?? null,
       created_at: now,
       updated_at: now,
-    });
-    if (error) {
-      throw new Error(`Failed to create appointment: ${error.message}`);
-    }
+    };
 
-    await supabase.from("appointment_status_history").insert({
-      id: crypto.randomUUID(),
-      appointment_id: appointmentId,
-      old_status: null,
-      new_status: body.status ?? "scheduled",
-      changed_by: body.createdByUserId,
-      change_reason: "appointment_created",
-      created_at: now,
-    });
+    if (supabase) {
+      const { error } = await supabase.from("appointments").insert(record);
+      if (error) {
+        app.log.warn({ error }, "appointments insert failed; using fallback");
+        appointmentsFallback.set(appointmentId, record);
+      } else {
+        appointmentsFallback.delete(appointmentId);
+      }
 
-    if (body.appointmentType === "opd") {
-      const { error: opdError } = await supabase.from("opd_visits").insert({
+      const { error: historyError } = await supabase.from("appointment_status_history").insert({
         id: crypto.randomUUID(),
         appointment_id: appointmentId,
-        company_id: body.companyId,
-        employee_id: body.employeeId ?? null,
-        patient_id: body.patientId ?? null,
-        doctor_id: body.doctorId,
-        clinic_location: body.clinicLocation ?? null,
-        patient_eta_minutes: body.patientEtaMinutes ?? null,
-        status: body.status === "confirmed" ? "scheduled" : body.status ?? "scheduled",
+        old_status: null,
+        new_status: body.status ?? "scheduled",
+        changed_by: body.createdByUserId,
+        change_reason: "appointment_created",
+        created_at: now,
       });
-      if (opdError) {
-        throw new Error(`Failed to create OPD visit: ${opdError.message}`);
+      if (historyError) {
+        app.log.warn({ error: historyError }, "appointment_status_history insert failed");
+      }
+
+      if (body.appointmentType === "opd") {
+        const { error: opdError } = await supabase.from("opd_visits").insert({
+          id: crypto.randomUUID(),
+          appointment_id: appointmentId,
+          company_id: body.companyId,
+          employee_id: body.employeeId ?? null,
+          patient_id: body.patientId ?? null,
+          doctor_id: body.doctorId,
+          clinic_location: body.clinicLocation ?? null,
+          patient_eta_minutes: body.patientEtaMinutes ?? null,
+          status: body.status === "confirmed" ? "scheduled" : body.status ?? "scheduled",
+        });
+        if (opdError) {
+          app.log.warn({ error: opdError }, "opd_visits insert failed");
+        }
+      }
+    } else {
+      appointmentsFallback.set(appointmentId, record);
+    }
+
+    if (mongo) {
+      try {
+        await mongo.collection("appointment_events").insertOne({
+          appointmentId,
+          companyId: body.companyId,
+          employeeId: body.employeeId ?? null,
+          patientId: body.patientId ?? null,
+          doctorId: body.doctorId,
+          eventType: "appointment_created",
+          payload: {
+            appointmentType: body.appointmentType,
+            source: body.source,
+            status: body.status ?? "scheduled",
+          },
+          source: "backend-api",
+          eventAt: now,
+          ingestedAt: now,
+          schemaVersion: 1,
+        });
+      } catch (error) {
+        app.log.warn({ error }, "Skipping appointment_events Mongo insert");
       }
     }
 
-    await mongo.collection("appointment_events").insertOne({
-      appointmentId,
-      companyId: body.companyId,
-      employeeId: body.employeeId ?? null,
-      patientId: body.patientId ?? null,
-      doctorId: body.doctorId,
-      eventType: "appointment_created",
-      payload: {
-        appointmentType: body.appointmentType,
-        source: body.source,
-        status: body.status ?? "scheduled",
-      },
-      source: "backend-api",
-      eventAt: now,
-      ingestedAt: now,
-      schemaVersion: 1,
-    });
-
-    await enqueueOutboxEvent(app, {
-      event_type: "appointment.created",
-      aggregate_type: "appointment",
-      aggregate_id: appointmentId,
-      payload: {
-        companyId: body.companyId,
-        employeeId: body.employeeId ?? null,
-        doctorId: body.doctorId,
-        appointmentType: body.appointmentType,
-      },
-      idempotency_key: `appointment-created:${appointmentId}`,
-    });
+    if (supabase) {
+      try {
+        await enqueueOutboxEvent(app, {
+          event_type: "appointment.created",
+          aggregate_type: "appointment",
+          aggregate_id: appointmentId,
+          payload: {
+            companyId: body.companyId,
+            employeeId: body.employeeId ?? null,
+            doctorId: body.doctorId,
+            appointmentType: body.appointmentType,
+          },
+          idempotency_key: `appointment-created:${appointmentId}`,
+        });
+      } catch (error) {
+        app.log.warn({ error }, "Failed to enqueue appointment created event");
+      }
+    }
 
     return { status: "ok", data: { appointmentId } };
   });
@@ -127,8 +152,30 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
       limit?: number;
     };
 
-    const supabase = requireSupabase(app);
+    const supabase = app.dbClients.supabase;
     const limit = Math.min(Number(query.limit ?? 100) || 100, 250);
+
+    const formatFallback = (items: Record<string, any>[]) => ({
+      status: "ok",
+      data: items.map((item) => ({
+        ...item,
+        opd_visits: item.appointment_type === "opd" ? { patient_eta_minutes: item.patient_eta_minutes ?? null, clinic_location: item.clinic_location ?? null, status: item.status } : null,
+        employee_name: null,
+        employee_avatar_url: null,
+        doctor_name: null,
+        doctor_avatar_url: null,
+        patient_name: item.patient_summary ?? "Patient",
+        patient_age: null,
+        patient_gender: null,
+        patient_phone: null,
+        patient_avatar_url: null,
+      })),
+    });
+
+    if (!supabase) {
+      const fallbackItems = Array.from(appointmentsFallback.values());
+      return formatFallback(fallbackItems.slice(0, limit));
+    }
 
     let dbQuery = supabase
       .from("appointments")
@@ -144,7 +191,9 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
 
     const { data, error } = await dbQuery;
     if (error) {
-      throw new Error(`Failed to list appointments: ${error.message}`);
+      app.log.warn({ error }, "Failed to list appointments; using fallback");
+      const fallbackItems = Array.from(appointmentsFallback.values());
+      return formatFallback(fallbackItems.slice(0, limit));
     }
     const appointments = data ?? [];
     const employeeIds = appointments.map((item) => item.employee_id).filter(Boolean);
@@ -186,7 +235,12 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/:id", async (request) => {
     const { id } = request.params as { id: string };
-    const supabase = requireSupabase(app);
+    const supabase = app.dbClients.supabase;
+
+    if (!supabase) {
+      const fallback = appointmentsFallback.get(id) ?? null;
+      return { status: "ok", data: fallback };
+    }
 
     const { data, error } = await supabase
       .from("appointments")
@@ -195,7 +249,9 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
       .maybeSingle();
 
     if (error) {
-      throw new Error(`Failed to fetch appointment: ${error.message}`);
+      app.log.warn({ error }, "Failed to fetch appointment; using fallback");
+      const fallback = appointmentsFallback.get(id) ?? null;
+      return { status: "ok", data: fallback };
     }
 
     return { status: "ok", data };

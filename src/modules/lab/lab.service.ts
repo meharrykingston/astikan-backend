@@ -6,7 +6,6 @@ import { cacheGet, cacheSet } from "./lab.cache";
 
 type NiramayaConfig = Pick<
   AppEnv,
-  | "NIRAMAYA_TEST_URL"
   | "NIRAMAYA_PROD_URL"
   | "NIRAMAYA_PINCODE_URL"
   | "NIRAMAYA_AUTH"
@@ -16,7 +15,7 @@ type NiramayaConfig = Pick<
 >;
 type HttpMethod = "GET" | "POST";
 type Payload = Record<string, unknown>;
-type NiramayaHost = "test" | "prod" | "pincode";
+type NiramayaHost = "prod" | "pincode";
 type NiramayaSearchItem = {
   Search?: {
     id?: string | number;
@@ -121,11 +120,7 @@ export const buildLabService = (config: NiramayaConfig) => {
 
   const buildUrl = (host: NiramayaHost, endpoint: string): string => {
     const hostBase =
-      host === "test"
-        ? config.NIRAMAYA_TEST_URL
-        : host === "prod"
-          ? config.NIRAMAYA_PROD_URL
-          : config.NIRAMAYA_PINCODE_URL;
+      host === "prod" ? config.NIRAMAYA_PROD_URL : config.NIRAMAYA_PINCODE_URL;
     const base = hostBase.replace(/\/+$/, "");
     let path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
 
@@ -331,13 +326,13 @@ export const buildLabService = (config: NiramayaConfig) => {
         normalizedPayload.patient_notes = payload.patient_notes;
       }
 
-      return callNiramaya("test", "/api/addorder", "POST", {
+      return callNiramaya("prod", "/api/addorder", "POST", {
         data: normalizedPayload,
       });
     },
 
     orderStatus: (reference: string) =>
-      callNiramaya("test", "/api/orderstatus", "POST", {
+      callNiramaya("prod", "/api/orderstatus", "POST", {
         data: {
           reference_id: reference,
           authorization: config.NIRAMAYA_AUTH,

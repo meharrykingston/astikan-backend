@@ -9,6 +9,7 @@ import challengesRoutes from "./modules/challenges/challenges.routes";
 import doctorsRoutes from "./modules/doctors/doctors.routes";
 import employeesRoutes from "./modules/employees/employees.routes";
 import healthRoutes from "./modules/health/health.routes";
+import corporateRoutes from "./modules/corporate/corporate.routes";
 import integrationsRoutes from "./modules/integrations/integrations.routes";
 import labRoutes from "./modules/lab/lab.routes";
 import logsRoutes from "./modules/logs/logs.routes";
@@ -34,6 +35,7 @@ const routes: FastifyPluginAsync = async (app) => {
   await app.register(labRoutes, { prefix: "/lab" });
   await app.register(pharmacyRoutes, { prefix: "/pharmacy" });
   await app.register(notificationsRoutes, { prefix: "/notifications" });
+  await app.register(corporateRoutes, { prefix: "/corporate" });
   await app.register(companiesRoutes, { prefix: "/companies" });
   await app.register(creditsRoutes, { prefix: "/credits" });
   await app.register(challengesRoutes, { prefix: "/challenges" });
