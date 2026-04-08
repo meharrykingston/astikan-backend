@@ -179,7 +179,7 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
 
     let dbQuery = supabase
       .from("appointments")
-      .select("*, opd_visits(patient_eta_minutes, clinic_location, status), teleconsult_sessions(id, company_id, employee_id, doctor_id, scheduled_at, status)")
+      .select("*, opd_visits(patient_eta_minutes, clinic_location, status)")
       .order("scheduled_start", { ascending: true })
       .limit(limit);
     if (query.companyId) dbQuery = dbQuery.eq("company_id", query.companyId);
@@ -196,10 +196,23 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
       return formatFallback(fallbackItems.slice(0, limit));
     }
     const appointments = data ?? [];
+    const appointmentIds = appointments.map((item) => item.id).filter(Boolean);
     const employeeIds = appointments.map((item) => item.employee_id).filter(Boolean);
     const doctorIds = appointments.map((item) => item.doctor_id).filter(Boolean);
     const patientIds = appointments.map((item) => item.patient_id).filter(Boolean);
     const userIds = Array.from(new Set([...employeeIds, ...doctorIds]));
+    const { data: teleconsultSessions } = appointmentIds.length
+      ? await supabase
+          .from("teleconsult_sessions")
+          .select("id, appointment_id, company_id, employee_id, doctor_id, scheduled_at, status")
+          .in("appointment_id", appointmentIds)
+      : { data: [] as Array<Record<string, any>> };
+    const teleconsultSessionMap = new Map<string, Array<Record<string, any>>>();
+    for (const session of teleconsultSessions ?? []) {
+      const bucket = teleconsultSessionMap.get(session.appointment_id) ?? [];
+      bucket.push(session);
+      teleconsultSessionMap.set(session.appointment_id, bucket);
+    }
 
     const { data: users } = userIds.length
       ? await supabase.from("app_users").select("id, full_name, avatar_url").in("id", userIds)
@@ -219,6 +232,7 @@ const appointmentsRoutes: FastifyPluginAsync = async (app) => {
         const patient = item.patient_id ? patientMap.get(item.patient_id) : null;
         return {
           ...item,
+          teleconsult_sessions: teleconsultSessionMap.get(item.id) ?? [],
           employee_name: employee?.full_name ?? null,
           employee_avatar_url: employee?.avatar_url ?? null,
           doctor_name: doctor?.full_name ?? null,
